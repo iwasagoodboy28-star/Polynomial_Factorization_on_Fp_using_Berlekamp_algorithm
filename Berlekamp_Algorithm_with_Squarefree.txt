@@ -1,0 +1,133 @@
+p=3 
+l=1
+Fq=GF(p^l,'a')
+R.<x> = PolynomialRing(Fq)
+
+#f in Fqの無平方分解 [重複因子, 重複度]を要素とするリストを返却.
+# [1,指数]の形は返さない.
+#  (そのために疑似コードのwhileを削除.)
+def squarefree(f): 
+    ans_list = []
+    s0 = R(gcd(f, f.diff(x))) 
+    t0 = R(f / s0) 
+    i = 1
+    while t0 != 1: #s0,t0をs_{i-1}, t_{i-1}とみる.
+        ui = gcd(s0,t0)
+        fi = R(t0 / ui)
+        si = R(s0 / ui)
+        ti = ui
+        s0 = si
+        t0 = ti
+        if fi != 1:
+            ans_list.append([fi, i])
+        i = i + 1
+    if s0 != 1:
+        list_s0 = s0.coefficients(sparse = False) #係数のリスト. n番目にn次のもの.
+        si = 0
+        #s0^(1/p)を作るために, 各係数をp^(l-1)乗,各指数を1/p倍する.
+        for j in range(len(list_s0)):
+            si += list_s0[j] ^ (p^(l-1)) * x ^ (j // p)  
+        s_list = squarefree(si) #再帰呼び出し.
+        len_s_list = len(s_list)
+        for j in range(len(s_list)): 
+            fj, mj = s_list[j]  #[多項式, 指数]のリストになっている.
+            ans_list.append([fj, p * mj])
+    return ans_list
+
+# f(2次以上) in Fqに対して, そのPetr-Berlekamp-Matrixを返す. 
+def Petr_Berlekamp_Matrix(f):
+    m = f.degree()
+    B = Matrix(Fq,m) # デフォルトで0行列.
+    g0 = 1
+    B[0] = [1] + [0] * (m-1) #vect(g0).
+    g1 = (x ^ (p ^ l)).mod(f)
+    B1_tmp = g1.coefficients(sparse=False) #係数リスト.
+    while(len(B1_tmp) < m): #長さmになるようにサイズ調整.
+        B1_tmp.append(0) #0で埋める.
+    B[1] = B1_tmp #vect(g1)を作成.
+    gi = g1
+    for i in range(1,m-1): #1以上m-1未満つまり1以上m-2以下.
+        g3 = (gi*g1).mod(f)  #g_{i+1}
+        B3_tmp = g3.coefficients(sparse=False)  #係数リスト. n番目にn次.
+        while(len(B3_tmp) < m): #長さmになるようにサイズ調整.
+            B3_tmp.append(0) #0で埋める.
+        B[i+1] = B3_tmp  #vect(gi+1).
+        gi = g3
+    return B
+
+#f in F_qに対し, f-簡約多項式の係数ベクトルを
+#行ベクトルとする行列を返す.
+def f_reduced_poly(B):
+    m = len(B[0]) #サイズを取得.
+    I = identity_matrix(Fq, m) 
+    B = B-I
+    for i in range(m-1): #0スタートでm-2まで.
+        #B[i,i:m]は, Bのi行で, i列からm-1列まで取り出す. 
+        #型が行列のためリストに変換.
+        check_list = B[i, i:m].list() 
+        for element in check_list: #i以上m-1以下.
+            if element != 0:  #check_listのj番目にB[i,j]が入る.
+                index = check_list.index(element) 
+                break
+        if check_list == [0] * (m-i): 
+            continue
+        else:
+            B.swap_columns(i,i+index)  #取得した添字を使い列交換.
+        B.rescale_col(i,B[i, i]^(-1))  #i列目をB[i, i]^(-1)倍.
+        for j in range(m):
+            if j != i:  # -B[j, i] * i列目 + j列目.
+                B.add_multiple_of_column(j,i,-B[i, j]) 
+    return I - B 
+
+def Berlekamp_Algorithm(f): 
+    F = [] #最終的に返されるリスト.
+    f_reduced_polylist = []
+    B = Petr_Berlekamp_Matrix(f)
+    B = f_reduced_poly(B)
+    #f-簡約多項式たちのリストを作成.
+    for coef in B.rows(): #B.rows()でBの行全てのリスト.
+        g = 0
+        for deg in range(len(coef)): #各B.rowsのリストに対して.
+            g += coef[deg]*(x^deg )
+        if g != 0:
+            f_reduced_polylist.append(g)
+    if len(f_reduced_polylist) == 1:
+        return [f]
+    else:
+        F.append(f)
+    for gi in f_reduced_polylist:
+        if f_reduced_polylist.index(gi) == 0: #先頭は除く.
+            continue
+        else:
+            F_dash = []
+            for f_bar in F:
+                F_tilde = []
+                for alpha in Fq:  
+                    if gcd(f_bar, gi - alpha).degree() != 0:
+                        F_tilde.append(gcd(f_bar, gi-alpha))
+                H = 1
+                for h in F_tilde:  #H = h in F_tildeの積.
+                    H *= h
+                f_bar = f_bar / H
+                if f_bar != 1:
+                    F_tilde.append(f_bar)
+                F_dash = F_dash + F_tilde  #結合.
+            if len(F_dash) == len(f_reduced_polylist):
+                return F_dash
+            F = F_dash
+    return F
+
+#因数分解結果 つまり[[既約因子,重複度]]を返す.
+def Berlekamp_Algorithm_with_Squarefree(f): 
+    ans_list = []
+    for fi in squarefree(f): #2重リスト 0番目:重複因子 1番目:指数.
+        if fi[0].degree() == 1: #1次モニック因子は既約.
+            ans_list.append([fi[0], fi[1]])
+        else:
+            for g in Berlekamp_Algorithm(fi[0]):
+                ans_list.append([g, fi[1]])
+    return ans_list
+
+#レポート用
+f = x^5 +2*x^4 +x^3 +2*x^2 +2
+Berlekamp_Algorithm_with_Squarefree(f)
